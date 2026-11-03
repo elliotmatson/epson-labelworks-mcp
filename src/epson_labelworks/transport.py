@@ -234,8 +234,11 @@ class UsbTransport(Transport):
             return b""
         import usb.core
 
+        # Read one max-size packet per transfer. The PX400 sends 64-byte status
+        # frames as full packets with no terminating short packet, so a larger
+        # request waits for more data and pyusb drops the partial read on timeout.
         try:
-            return bytes(self.ep_in.read(max(size, self.ep_in.wMaxPacketSize), timeout=int(timeout * 1000)))
+            return bytes(self.ep_in.read(self.ep_in.wMaxPacketSize, timeout=max(1, int(timeout * 1000))))
         except usb.core.USBTimeoutError:
             return b""
         except usb.core.USBError as e:
