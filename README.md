@@ -5,9 +5,9 @@ It speaks the reverse-engineered ESC/P-L2 raster protocol directly over Bluetoot
 Classic (RFCOMM), USB, or serial. It exposes preview and print tools over
 streamable HTTP, so it can sit behind an MCP gateway such as Obot.
 
-> Not affiliated with Epson. The PX400 profile is built from Epson's Android SDK
-> metadata and has **not been confirmed on hardware yet**. Real printing is off until
-> you enable it (see *Bring-up*).
+> Not affiliated with Epson. **Hardware-verified:** LW-PX400 over USB (12 mm tape,
+> 2026-11-02). Other models and tape widths are profile data from the published
+> research; printing on unverified profiles is off until you enable it (see *Bring-up*).
 
 ## Tools
 
@@ -69,10 +69,12 @@ docker compose up -d --build
 curl localhost:8765/healthz
 ```
 
-* RFCOMM uses the host's BlueZ stack, so the container runs with `network_mode: host`.
-  The image uses Debian's `python3` because the official `python:*-slim` images are
-  built without `AF_BLUETOOTH`.
-* For USB, uncomment the `device_cgroup_rules` and `/dev/bus/usb` lines in `compose.yaml`.
+* USB is the default: the container gets `/dev/bus/usb` and cgroup rule `c 189:* rwm`,
+  and detaches the host's `usblp` driver while it prints. On Proxmox, pass the printer
+  (`04b8:0705`) through to the VM by vendor/device ID.
+* For Bluetooth, set `LW_TRANSPORT=rfcomm` and use `network_mode: host` (RFCOMM uses the
+  host's BlueZ stack). The image uses Debian's `python3` because the official
+  `python:*-slim` images are built without `AF_BLUETOOTH`.
 * **Obot:** add a remote MCP server at `http://<host>:8765/mcp` with header
   `Authorization: Bearer <LW_MCP_TOKEN>`. Set `LW_ALLOWED_HOSTS` to the hostname Obot
   uses to turn on DNS-rebinding protection.

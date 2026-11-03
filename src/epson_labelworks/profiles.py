@@ -60,8 +60,8 @@ LW_PX400 = Profile(
     status_protocol="v1",
     cut_variant="fast",
     has_half_cut=False,
-    verified=False,
-    usb_model_names=("LW-PX400", "LW-PX400 "),
+    verified=True,
+    usb_model_names=("LW-PX400",),
     notes=(
         "Epson's Android SDK (LWPrintProductInformation) lists the LW-PX400 as "
         "capability level 3, 180 dpi, tape kinds 4-24 mm, no half cut, 8-byte status.",
@@ -69,7 +69,10 @@ LW_PX400 = Profile(
         "Hardware-observed (USB): 04b8:0705, IEEE-1284 'MFG:EPSON;CMD:ESCPL2;MDL:LW-PX400', "
         "bulk OUT 0x02 / IN 0x81, textual status frames on bulk IN after 'Q enable', "
         "GetLWStatus byte 3 = tape code.",
-        "Printing not yet verified: run print_test_pattern before enabling.",
+        "Printing verified 2026-11-02 over USB on 12 mm tape: level-3 job sequence, "
+        "'01' cutter bytes, flip_across=True and 72 printable dots all confirmed with "
+        "the calibration wedge. Other tape widths use the 180 dpi table; confirm each "
+        "with print_test_pattern.",
     ),
 )
 

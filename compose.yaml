@@ -4,19 +4,27 @@ services:
     image: epson-labelworks-mcp:latest
     container_name: labelworks-mcp
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LW_TRANSPORT: ${LW_TRANSPORT:-usb}
+      LW_PROFILE: ${LW_PROFILE:-lw-px400}
+      LW_MCP_TOKEN: ${LW_MCP_TOKEN:-}
+      LW_ALLOWED_HOSTS: ${LW_ALLOWED_HOSTS:-}
+      LW_DEFAULT_TAPE_MM: ${LW_DEFAULT_TAPE_MM:-12}
+    ports:
+      - "${LW_PORT:-8765}:8765"
     volumes:
-      - ./data:/data
+      - labelworks-data:/data
+      # USB: the printer class device (04b8:0705) is opened through usbfs.
+      - /dev/bus/usb:/dev/bus/usb
+    device_cgroup_rules:
+      - "c 189:* rwm"
 
-    # --- Bluetooth (LW_TRANSPORT=rfcomm) ---------------------------------
-    # RFCOMM sockets need the host's Bluetooth stack: pair the printer on the
-    # host with bluetoothctl first, then share the host network namespace.
-    network_mode: host
+    # Bluetooth instead of USB: set LW_TRANSPORT=rfcomm and LW_BT_ADDRESS,
+    # pair the printer on the host, remove `ports:` and use:
+    # network_mode: host
 
-    # --- USB (LW_TRANSPORT=usb) ------------------------------------------
-    # Uncomment to pass the printer through instead of / as well as Bluetooth.
-    # device_cgroup_rules:
-    #   - "c 189:* rwm"
-    # volumes:
-    #   - ./data:/data
-    #   - /dev/bus/usb:/dev/bus/usb
+volumes:
+  labelworks-data:
