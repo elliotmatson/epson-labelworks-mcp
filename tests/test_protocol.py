@@ -101,6 +101,23 @@ def test_status_frame_parse():
     assert found == frame and rest == b"@ST:0"
 
 
+# Captured from a real LW-PX400 (USB bulk IN after 'Q enable'), 2026-11-02.
+PX400_FRAME = b"@BDC ST\r\nST:00;ER:00;WR:00;RV:00;TW:03;TR:00;CT:00;OP:00;EI:00;\xff"
+
+
+def test_px400_hardware_status_frame():
+    assert len(PX400_FRAME) == 64
+    st = parse_text_frame(PX400_FRAME)
+    assert (st.state, st.error, st.tape_width_mm, st.ready) == ("idle", "no_error", 12, True)
+    assert st.fields["WR"] == 0 and "BD" not in st.fields
+
+
+def test_px400_stream_resync():
+    stream = PX400_FRAME * 3 + b"@BDC ST\r"   # as read: 3 frames + a partial
+    found, rest = find_text_frame(b"\x00@junk" + stream)
+    assert found == PX400_FRAME and rest == b"@BDC ST\r"
+
+
 def test_render_fits_every_tape():
     for mm in LW_PX400.tape_widths_mm:
         img = build_image(LabelSpec(text="Rack A\nPort 12", qr="GBC-0042" if mm >= 12 else None),

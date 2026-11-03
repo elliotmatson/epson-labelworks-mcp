@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 
 STATUS_FRAME_LEN = 64
@@ -58,23 +59,27 @@ class PrinterStatus:
         return d
 
 
-def _field(text: str, key: str) -> int | None:
-    i = text.rfind(key)
-    if i < 0 or i + 5 > len(text):
-        return None
-    try:
-        return int(text[i + 3 : i + 5], 16)
-    except ValueError:
-        return None
+_FIELD_RE = re.compile(r"(?<![A-Z])([A-Z]{2})[:=]([0-9A-Fa-f]{2})")
+
+
+def _fields(text: str) -> dict[str, int]:
+    """KEY:HH pairs. Last occurrence wins; the '@BDC ST' header is not a field."""
+    return {k: int(v, 16) for k, v in _FIELD_RE.findall(text)}
 
 
 def parse_text_frame(frame: bytes) -> PrinterStatus:
-    """Parse a 64-byte '@ST:00;ER:00;TW:03;...' frame."""
+    """Parse a 64-byte status frame.
+
+    LW-PX400 over USB (hardware-observed):
+        '@BDC ST\\r\\nST:00;ER:00;WR:00;RV:00;TW:03;TR:00;CT:00;OP:00;EI:00;' + FF
+    Android-SDK form: '@ST:00;ER:00;TW:03;...' padded to 64 bytes.
+    """
     if len(frame) != STATUS_FRAME_LEN or frame[:1] != b"@":
         raise ValueError(f"not a status frame: {frame[:16].hex(' ')}")
     text = frame.rstrip(b"\x00\xff").decode("ascii", errors="replace")
-    keys = ("ST", "ER", "TW", "TR", "EI", "EJ", "TO", "IR", "RR", "WR", "RV", "CT", "OP")
-    fields = {k: v for k in keys if (v := _field(text, k)) is not None}
+    fields = _fields(text)
+    if "ST" not in fields:
+        raise ValueError(f"status frame has no ST field: {text!r}")
     st, er, tw = fields.get("ST"), fields.get("ER"), fields.get("TW")
     return PrinterStatus(
         source="text_v1",
@@ -95,15 +100,17 @@ def find_text_frame(buf: bytes) -> tuple[bytes | None, bytes]:
     """Return the last complete status frame in buf, plus leftover bytes."""
     found = None
     while True:
-        i = buf.find(b"@ST")
+        i = buf.find(b"@")
         if i < 0:
-            # keep a possible partial '@' at the tail
-            j = buf.rfind(b"@")
-            return found, (buf[j:] if j >= 0 else b"")
+            return found, b""
         if len(buf) - i < STATUS_FRAME_LEN:
             return found, buf[i:]
-        found = buf[i : i + STATUS_FRAME_LEN]
-        buf = buf[i + STATUS_FRAME_LEN :]
+        cand = buf[i : i + STATUS_FRAME_LEN]
+        if cand[-1] == 0xFF and b"ST" in cand:
+            found = cand
+            buf = buf[i + STATUS_FRAME_LEN :]
+        else:
+            buf = buf[i + 1 :]  # stray '@', resync
 
 
 def parse_usb_lwstatus(block: bytes) -> PrinterStatus:

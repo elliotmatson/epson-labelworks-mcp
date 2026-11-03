@@ -66,7 +66,10 @@ LW_PX400 = Profile(
         "Epson's Android SDK (LWPrintProductInformation) lists the LW-PX400 as "
         "capability level 3, 180 dpi, tape kinds 4-24 mm, no half cut, 8-byte status.",
         "Level 3 = level-1 job plus 'H 05' and 's <speed>' page commands.",
-        "Not yet hardware-verified: run probe_printer and print_test_pattern first.",
+        "Hardware-observed (USB): 04b8:0705, IEEE-1284 'MFG:EPSON;CMD:ESCPL2;MDL:LW-PX400', "
+        "bulk OUT 0x02 / IN 0x81, textual status frames on bulk IN after 'Q enable', "
+        "GetLWStatus byte 3 = tape code.",
+        "Printing not yet verified: run print_test_pattern before enabling.",
     ),
 )
 
