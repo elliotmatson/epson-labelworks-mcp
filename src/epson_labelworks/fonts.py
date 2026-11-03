@@ -43,6 +43,13 @@ ALIASES: dict[str, list[str]] = {
     "chancery": ["Z003"],
 }
 DEFAULT_FAMILY = "sans"
+# When none of an alias's families is installed, fall back to a similar generic alias.
+ALIAS_FALLBACK = {"courier": "mono", "typewriter": "mono", "narrow": "sans-condensed",
+                  "sans-condensed": "sans", "serif-condensed": "serif", "helvetica": "sans",
+                  "arial": "sans", "gothic": "sans", "avant-garde": "sans", "times": "serif",
+                  "bookman": "serif", "schoolbook": "serif", "century": "serif",
+                  "palatino": "serif", "script": "serif", "chancery": "serif", "mono": "sans",
+                  "serif": "sans"}
 FALLBACK_FAMILIES = ["DejaVu Sans", "FreeSans", "FreeSerif", "Noto Sans Symbols2",
                      "Noto Sans Symbols", "DejaVu Sans Mono", "FreeMono"]
 
@@ -151,9 +158,13 @@ def find_family(name: str | None) -> Family:
     want = (name or DEFAULT_FAMILY).strip().lower()
     if want in fams:
         return fams[want]
-    for cand in ALIASES.get(want, []):
-        if cand.lower() in fams:
-            return fams[cand.lower()]
+    alias, seen = want, set()
+    while alias in ALIASES and alias not in seen:
+        seen.add(alias)
+        for cand in ALIASES[alias]:
+            if cand.lower() in fams:
+                return fams[cand.lower()]
+        alias = ALIAS_FALLBACK.get(alias, "")
     hits = [f for k, f in fams.items() if want in k]
     if len(hits) == 1:
         return hits[0]
