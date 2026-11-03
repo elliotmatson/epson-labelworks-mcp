@@ -63,9 +63,13 @@ Remaining uncertainties, all handled by bring-up:
 
 ## Deploy
 
+Every push to `main` runs the tests and publishes a multi-arch (amd64/arm64) image to
+`ghcr.io/elliotmatson/epson-labelworks-mcp` (`latest`, `sha-<short>`, and `X.Y.Z` for
+`vX.Y.Z` tags).
+
 ```sh
-cp .env.example .env        # set LW_TRANSPORT, LW_BT_ADDRESS, LW_MCP_TOKEN
-docker compose up -d --build
+cp .env.example .env        # set LW_MCP_TOKEN (and LW_BT_ADDRESS for Bluetooth)
+docker compose pull && docker compose up -d     # or: up -d --build to build locally
 curl localhost:8765/healthz
 ```
 

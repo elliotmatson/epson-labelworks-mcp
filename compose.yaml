@@ -1,7 +1,7 @@
 services:
   labelworks-mcp:
     build: .
-    image: epson-labelworks-mcp:latest
+    image: ghcr.io/elliotmatson/epson-labelworks-mcp:latest
     container_name: labelworks-mcp
     restart: unless-stopped
     env_file:
