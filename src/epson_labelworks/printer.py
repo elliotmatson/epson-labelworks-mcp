@@ -19,6 +19,16 @@ class PrinterError(RuntimeError):
     pass
 
 
+class PrinterStalled(PrinterError):
+    pass
+
+
+STATUS_WRITE_TIMEOUT = 3.0   # a status request is 9 bytes; a healthy printer takes it at once
+JOB_WRITE_TIMEOUT = 20.0
+STALL_HINT = ("The printer stopped accepting data (stalled). The server reset its USB port; "
+              "if the next print also stalls, power-cycle the printer.")
+
+
 @dataclass
 class JobSettings:
     tape_mm: int
@@ -87,7 +97,7 @@ class LabelPrinter:
 
     def _read_text_status(self, timeout: float, request: bool) -> PrinterStatus | None:
         if request:
-            self.t.write(P.status_request_v1(True))
+            self.t.write(P.status_request_v1(True), timeout=STATUS_WRITE_TIMEOUT)
         buf = b""
         deadline = time.monotonic() + timeout
         latest = None
@@ -105,11 +115,14 @@ class LabelPrinter:
                 return self.read_status()
             finally:
                 if not isinstance(self.t, FileTransport):
-                    self.t.write(P.status_request_v1(False))
+                    try:
+                        self.t.write(P.status_request_v1(False), timeout=STATUS_WRITE_TIMEOUT)
+                    except TransportError:
+                        pass
 
     # --- printing ----------------------------------------------------------
     def print_image(self, img: Image.Image, settings: JobSettings, *, check_tape: bool = True,
-                    wait_timeout: float = 90.0) -> dict:
+                    wait_timeout: float = 60.0) -> dict:
         job = build_job(img, self.profile, settings)
         result: dict = {"bytes": len(job), "tape_mm": settings.tape_mm,
                         "length_mm": round(self.profile.dots_to_mm(img.width + 2 * self.profile.mm_to_dots(
@@ -118,7 +131,11 @@ class LabelPrinter:
             if isinstance(self.t, FileTransport):
                 self.t.write(job)
             else:
-                pre = self.read_status()
+                try:
+                    pre = self.read_status()
+                except TransportError as e:
+                    self.t.reset()
+                    raise PrinterStalled(f"{e}. {STALL_HINT}") from None
                 result["preflight"] = pre.to_dict() if pre else None
                 if pre is not None:
                     if pre.error_code not in (None, 0):
@@ -128,9 +145,16 @@ class LabelPrinter:
                     if check_tape and pre.tape_width_mm and pre.tape_width_mm != settings.tape_mm:
                         raise PrinterError(
                             f"loaded tape is {pre.tape_width_mm} mm but label is for {settings.tape_mm} mm")
-                self.t.write(job)
-                result["final"] = self._wait_done(wait_timeout)
-                self.t.write(P.status_request_v1(False))
+                try:
+                    self.t.write(job, timeout=JOB_WRITE_TIMEOUT)
+                    result["final"] = self._wait_done(wait_timeout)
+                except (PrinterStalled, TransportError) as e:
+                    self.t.reset()
+                    raise PrinterStalled(f"{e}. {STALL_HINT}") from None
+                try:
+                    self.t.write(P.status_request_v1(False), timeout=STATUS_WRITE_TIMEOUT)
+                except TransportError:
+                    pass
         if isinstance(self.t, FileTransport) and self.t.last_path:
             result["job_file"] = str(self.t.last_path)
         return result
@@ -139,8 +163,16 @@ class LabelPrinter:
         deadline = time.monotonic() + timeout
         last: PrinterStatus | None = None
         saw_busy = False
+        failures = 0
         while time.monotonic() < deadline:
-            st = self.read_status(timeout=2.0, request=True)
+            try:
+                st = self.read_status(timeout=2.0, request=True)
+                failures = 0
+            except TransportError as e:
+                failures += 1
+                if failures >= 3:
+                    raise PrinterStalled(f"no response to status requests ({e})") from None
+                continue
             if st is None:
                 continue
             last = st
@@ -155,7 +187,8 @@ class LabelPrinter:
             time.sleep(0.4)
         if last is None:
             return None  # no status channel; assume fire-and-forget
-        raise PrinterError(f"timed out waiting for print end (last state: {last.state})")
+        raise PrinterStalled(f"timed out after {timeout:.0f}s waiting for print end "
+                             f"(last state: {last.state})")
 
 
 def probe(transport: Transport) -> dict:
@@ -168,14 +201,14 @@ def probe(transport: Transport) -> dict:
             if isinstance(transport, FileTransport):
                 out["note"] = "dry-run transport; nothing to probe"
                 return out
-            transport.write(P.status_request_v1(True))
+            transport.write(P.status_request_v1(True), timeout=STATUS_WRITE_TIMEOUT)
             raw = b""
             deadline = time.monotonic() + 3.0
             while time.monotonic() < deadline:
                 raw += transport.read(256, timeout=0.3)
                 if len(raw) >= 128:
                     break
-            transport.write(P.status_request_v1(False))
+            transport.write(P.status_request_v1(False), timeout=STATUS_WRITE_TIMEOUT)
             out["status_raw_hex"] = raw.hex(" ") if raw else None
             frame, _ = find_text_frame(raw)
             out["status"] = parse_text_frame(frame).to_dict() if frame else None

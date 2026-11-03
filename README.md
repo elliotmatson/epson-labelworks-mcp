@@ -132,7 +132,13 @@ curl localhost:8765/healthz
 See `.env.example`. Main settings: `LW_PROFILE`, `LW_TRANSPORT`
 (`rfcomm|usb|serial|file`), `LW_BT_ADDRESS`, `LW_BT_CHANNEL`, `LW_USB_PID`,
 `LW_DEFAULT_TAPE_MM`, `LW_ALLOW_UNVERIFIED`, `LW_MCP_TOKEN`, `LW_ALLOWED_HOSTS`,
-`LW_DATA_DIR` (saved labels), `LW_FONT_DIR` (extra fonts), `LW_TZ` (for `{date}`/`{time}`).
+`LW_DATA_DIR` (saved labels), `LW_FONT_DIR` (extra fonts), `LW_TZ` (for `{date}`/`{time}`),
+`LW_PRINT_WAIT_S` (how long `print_label` waits before returning while the job continues
+in the background, default 20).
+
+If the printer stops accepting data mid-job, the server gives up within a few seconds,
+resets the USB port and reports the stall instead of hanging. If a second print also
+stalls, power-cycle the printer.
 
 ## Development
 

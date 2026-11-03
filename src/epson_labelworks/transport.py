@@ -31,7 +31,11 @@ class Transport(ABC):
     def close(self) -> None: ...
 
     @abstractmethod
-    def write(self, data: bytes) -> None: ...
+    def write(self, data: bytes, timeout: float | None = None) -> None: ...
+
+    def reset(self) -> bool:
+        """Try to recover a stalled device. Returns True if something was reset."""
+        return False
 
     def read(self, size: int = 256, timeout: float = 0.5) -> bytes:
         """Read whatever arrives within timeout. Default: write-only transport."""
@@ -76,10 +80,13 @@ class RfcommSocketTransport(Transport):
             finally:
                 self.sock = None
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes, timeout: float | None = None) -> None:
         assert self.sock, "transport not open"
-        self.sock.settimeout(30)
-        self.sock.sendall(data)
+        self.sock.settimeout(timeout or 30)
+        try:
+            self.sock.sendall(data)
+        except (TimeoutError, socket.timeout):
+            raise TransportError(f"printer did not accept data within {timeout or 30:.0f}s") from None
 
     def read(self, size: int = 256, timeout: float = 0.5) -> bytes:
         assert self.sock, "transport not open"
@@ -115,9 +122,15 @@ class SerialTransport(Transport):
             self.port.close()
             self.port = None
 
-    def write(self, data: bytes) -> None:
-        self.port.write(data)
-        self.port.flush()
+    def write(self, data: bytes, timeout: float | None = None) -> None:
+        import serial
+
+        self.port.write_timeout = timeout or 30
+        try:
+            self.port.write(data)
+            self.port.flush()
+        except serial.SerialTimeoutException:
+            raise TransportError(f"printer did not accept data within {timeout or 30:.0f}s") from None
 
     def read(self, size: int = 256, timeout: float = 0.5) -> bytes:
         self.port.timeout = timeout
@@ -221,13 +234,37 @@ class UsbTransport(Transport):
                 self.dev.attach_kernel_driver(0)
         except Exception:
             pass
-        usb.util.dispose_resources(self.dev)
+        try:
+            usb.util.dispose_resources(self.dev)
+        except Exception:
+            pass
         self.dev = None
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes, timeout: float | None = None) -> None:
+        import usb.core
+
         chunk = 4096
+        ms = int((timeout or 30) * 1000)
         for i in range(0, len(data), chunk):
-            self.ep_out.write(data[i : i + chunk], timeout=30000)
+            try:
+                self.ep_out.write(data[i : i + chunk], timeout=ms)
+            except usb.core.USBTimeoutError:
+                raise TransportError(f"printer did not accept data within {ms // 1000}s "
+                                     f"({i} of {len(data)} bytes sent)") from None
+            except usb.core.USBError as e:
+                if getattr(e, "errno", None) == 110:
+                    raise TransportError(f"printer did not accept data within {ms // 1000}s") from None
+                raise TransportError(f"USB write failed: {e}") from None
+
+    def reset(self) -> bool:
+        """USB port reset: clears a printer that has stopped accepting data."""
+        if not self.dev:
+            return False
+        try:
+            self.dev.reset()
+            return True
+        except Exception:
+            return False
 
     def read(self, size: int = 256, timeout: float = 0.5) -> bytes:
         if self.ep_in is None:
@@ -321,7 +358,7 @@ class FileTransport(Transport):
             self.last_path.write_bytes(bytes(self.buf))
         self.buf.clear()
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: bytes, timeout: float | None = None) -> None:
         self.buf += data
 
     def describe(self) -> dict:

@@ -6,6 +6,8 @@ import hmac
 import io
 import logging
 import os
+import threading
+import time
 from typing import Annotated, Literal
 
 import anyio
@@ -32,7 +34,41 @@ PROFILE = get_profile(os.environ.get("LW_PROFILE", "lw-px400"))
 ALLOW_UNVERIFIED = os.environ.get("LW_ALLOW_UNVERIFIED", "0").lower() in ("1", "true", "yes")
 DRY_RUN_DIR = os.environ.get("LW_DRY_RUN_DIR", "./jobs")
 DEFAULT_TAPE = int(os.environ.get("LW_DEFAULT_TAPE_MM", "12"))
-_lock = anyio.Lock()
+PRINT_WAIT_S = float(os.environ.get("LW_PRINT_WAIT_S", "20"))
+_dev = threading.Lock()          # one USB/BT conversation at a time
+_job: "BatchJob | None" = None   # current or most recent print batch
+
+
+class BatchJob:
+    """A print batch running in its own thread so tool calls return promptly."""
+
+    def __init__(self, total: int, dry_run: bool):
+        self.id = time.strftime("%H%M%S")
+        self.total, self.dry_run = total, dry_run
+        self.printed = 0
+        self.results: list[dict] = []
+        self.error: str | None = None
+        self.done = threading.Event()
+        self.started = time.time()
+
+    def summary(self) -> dict:
+        state = "printing" if not self.done.is_set() else ("failed" if self.error else "done")
+        out = {"job_id": self.id, "state": state, "printed": self.printed, "total": self.total,
+               "dry_run": self.dry_run, "elapsed_s": round(time.time() - self.started, 1)}
+        if self.error:
+            out["error"] = self.error
+        return out
+
+
+def _with_device(fn, wait: float = 5.0):
+    """Run fn() holding the device lock, or raise if a print is using the printer."""
+    if not _dev.acquire(timeout=wait):
+        raise TransportError("printer is busy with a print job" +
+                             (f" ({_job.printed}/{_job.total} done)" if _job else ""))
+    try:
+        return fn()
+    finally:
+        _dev.release()
 
 mcp = MCPServer(
     name="labelworks",
@@ -208,8 +244,7 @@ async def _detect_tape(tape_mm: int | None) -> tuple[int, str]:
     if isinstance(t, FileTransport):
         return DEFAULT_TAPE, "default (dry-run transport)"
     try:
-        async with _lock:
-            st = await anyio.to_thread.run_sync(LabelPrinter(t, PROFILE).status)
+        st = await anyio.to_thread.run_sync(lambda: _with_device(LabelPrinter(t, PROFILE).status))
     except (TransportError, OSError) as e:
         log.warning("tape auto-detect failed: %s", e)
         return DEFAULT_TAPE, f"default (printer unreachable: {e})"
@@ -245,21 +280,26 @@ def printer_info() -> dict:
 @mcp.tool(title="Printer status", annotations=READ)
 async def printer_status() -> dict:
     """Current state, error and loaded tape width as reported by the printer."""
+    last = _job.summary() if _job else None
+    if _job and not _job.done.is_set():
+        return {"reachable": True, "busy": True, "job": last}
     try:
-        async with _lock:
-            st = await anyio.to_thread.run_sync(_printer(False).status)
+        st = await anyio.to_thread.run_sync(lambda: _with_device(_printer(False).status, wait=2))
     except (TransportError, OSError) as e:
-        return {"reachable": False, "error": str(e)}
+        return {"reachable": False, "error": str(e), "last_job": last}
     if st is None:
-        return {"reachable": True, "status": None, "note": "transport has no status channel"}
-    return {"reachable": True, **st.to_dict()}
+        return {"reachable": True, "status": None, "note": "transport has no status channel",
+                "last_job": last}
+    return {"reachable": True, **st.to_dict(), "last_job": last}
 
 
 @mcp.tool(title="Probe printer (read-only)", annotations=READ)
 async def probe_printer() -> dict:
     """Identify the printer without printing: USB descriptors / IEEE-1284 ID and raw status frame."""
-    async with _lock:
-        return await anyio.to_thread.run_sync(probe, from_env())
+    try:
+        return await anyio.to_thread.run_sync(lambda: _with_device(lambda: probe(from_env())))
+    except TransportError as e:
+        return {"error": str(e)}
 
 
 @mcp.tool(title="List fonts", annotations=READ)
@@ -338,25 +378,41 @@ async def print_label(**kw) -> list:
         png, lengths = _sheet(rendered, tape)
     except (ValueError, ValidationError) as e:
         return [f"Cannot render: {e}"]
+    global _job
+    if _job and not _job.done.is_set():
+        return [f"The printer is busy with job {_job.id} ({_job.printed}/{_job.total} printed). "
+                "Check printer_status and try again when it is done."]
     jobs = [(img, m) for img, m, _ in rendered for _ in range(kw["copies"])]
-    results = []
-    try:
-        for i, (img, margin) in enumerate(jobs):
-            last = i == len(jobs) - 1
-            cut = {"each": "job", "none": "none"}.get(kw["cut"], "job" if last else "none")
-            settings = JobSettings(tape_mm=tape, cut=cut, density=kw["density"],
-                                   speed=1 if kw["speed"] == "high" else 0,
-                                   margin_mm=PROFILE.dots_to_mm(margin))
-            async with _lock:
-                results.append(await anyio.to_thread.run_sync(
-                    lambda: _printer(dry_run).print_image(img, settings)))
-    except (PrinterError, TransportError, OSError) as e:
-        return [Image(data=png, format="png"),
-                {"printed": len(results), "requested": len(jobs), "error": str(e)}]
-    return [Image(data=png, format="png"),
-            {"printed": len(results), "dry_run": dry_run, "tape_mm": tape, "tape_source": how,
-             "length_mm": lengths[0] if len(lengths) == 1 else lengths,
-             "jobs": results if len(results) <= 5 else results[-1:]}]
+    batch = BatchJob(len(jobs), dry_run)
+    _job = batch
+
+    def run() -> None:
+        try:
+            with _dev:
+                for i, (img, margin) in enumerate(jobs):
+                    last = i == len(jobs) - 1
+                    cut = {"each": "job", "none": "none"}.get(kw["cut"], "job" if last else "none")
+                    settings = JobSettings(tape_mm=tape, cut=cut, density=kw["density"],
+                                           speed=1 if kw["speed"] == "high" else 0,
+                                           margin_mm=PROFILE.dots_to_mm(margin))
+                    batch.results.append(_printer(dry_run).print_image(img, settings))
+                    batch.printed += 1
+        except (PrinterError, TransportError, OSError) as e:
+            batch.error = str(e)
+            log.error("print job %s failed after %d/%d: %s", batch.id, batch.printed, batch.total, e)
+        finally:
+            batch.done.set()
+
+    threading.Thread(target=run, name=f"print-{batch.id}", daemon=True).start()
+    await anyio.to_thread.run_sync(lambda: batch.done.wait(PRINT_WAIT_S))
+    info = {**batch.summary(), "tape_mm": tape, "tape_source": how,
+            "length_mm": lengths[0] if len(lengths) == 1 else lengths}
+    if not batch.done.is_set():
+        info["note"] = (f"Still printing after {PRINT_WAIT_S:.0f}s; it continues in the background. "
+                        "printer_status shows progress.")
+    elif not batch.error:
+        info["jobs"] = batch.results if len(batch.results) <= 5 else batch.results[-1:]
+    return [Image(data=png, format="png"), info]
 
 
 SAVE_PARAMS = [("name", Annotated[str, Field(description="Name to save under (overwrites).")]),
@@ -424,12 +480,11 @@ async def print_test_pattern(tape_mm: TapeMM = None,
     img = test_pattern(PROFILE.dots_for(tape))
     margin = PROFILE.mm_to_dots(PROFILE.default_margin_mm)
     png = preview_png(img, PROFILE, tape, margin)
-    async with _lock:
-        try:
-            res = await anyio.to_thread.run_sync(
-                lambda: _printer(dry_run).print_image(img, JobSettings(tape_mm=tape)))
-        except (PrinterError, TransportError, OSError) as e:
-            return [Image(data=png, format="png"), {"error": str(e)}]
+    try:
+        res = await anyio.to_thread.run_sync(lambda: _with_device(
+            lambda: _printer(dry_run).print_image(img, JobSettings(tape_mm=tape))))
+    except (PrinterError, TransportError, OSError) as e:
+        return [Image(data=png, format="png"), {"error": str(e)}]
     return [Image(data=png, format="png"),
             {"tape_mm": tape, "tape_source": how, "dots_sent": PROFILE.dots_for(tape), **res}]
 
