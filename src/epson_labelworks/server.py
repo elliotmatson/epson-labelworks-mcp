@@ -203,21 +203,29 @@ class BearerAuth:
     def __init__(self, app, token: str | None):
         self.app, self.token = app, token
 
+    # A static token is not OAuth. Answering 401 + WWW-Authenticate (especially on
+    # the /.well-known discovery paths MCP clients probe first) makes gateways such
+    # as Obot conclude the server needs an OAuth login, which then propagates to
+    # every connector the gateway serves. So: discovery paths get a plain 404 and a
+    # missing/wrong token gets 403 with no auth challenge.
+
+    @staticmethod
+    async def _plain(send, status: int, body: bytes) -> None:
+        await send({"type": "http.response.start", "status": status,
+                    "headers": [(b"content-type", b"text/plain")]})
+        await send({"type": "http.response.body", "body": body})
+
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            if scope.get("path") == "/healthz":
-                await send({"type": "http.response.start", "status": 200,
-                            "headers": [(b"content-type", b"text/plain")]})
-                await send({"type": "http.response.body", "body": b"ok"})
-                return
+            path = scope.get("path", "")
+            if path == "/healthz":
+                return await self._plain(send, 200, b"ok")
+            if path.startswith("/.well-known/"):
+                return await self._plain(send, 404, b"not found")
             if self.token:
                 headers = dict(scope.get("headers") or [])
                 if headers.get(b"authorization", b"") != f"Bearer {self.token}".encode():
-                    await send({"type": "http.response.start", "status": 401,
-                                "headers": [(b"content-type", b"text/plain"),
-                                            (b"www-authenticate", b"Bearer")]})
-                    await send({"type": "http.response.body", "body": b"unauthorized"})
-                    return
+                    return await self._plain(send, 403, b"forbidden: missing or invalid bearer token")
         await self.app(scope, receive, send)
 
 
