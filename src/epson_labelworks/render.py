@@ -10,7 +10,7 @@ import io
 import os
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 
 from .profiles import Profile
 from .protocol import pack_column
@@ -47,106 +47,6 @@ def _line_box(font, line: str) -> tuple[int, int, int]:
     """(width, ascent-offset, height) of one line using font metrics."""
     l, t, r, b = font.getbbox(line or " ")
     return r - l, t, b - t
-
-
-def render_text(text: str, height: int, font_size: int | None = None, bold: bool = False,
-                align: str = "center", line_spacing: float = 0.15, mono: bool = False) -> Image.Image:
-    """Render one or more lines ('\\n'-separated) to fill `height` dots."""
-    lines = text.split("\n") if text else [""]
-    n = len(lines)
-
-    def layout(size: int):
-        font = load_font(size, bold, mono)
-        ascent, descent = font.getmetrics()
-        lh = ascent + descent
-        total = int(lh * n + lh * line_spacing * (n - 1))
-        return font, lh, total
-
-    if font_size is None:
-        lo, hi, best = 4, height * 2, 4
-        while lo <= hi:  # largest size whose stacked line height fits
-            mid = (lo + hi) // 2
-            if layout(mid)[2] <= height:
-                best, lo = mid, mid + 1
-            else:
-                hi = mid - 1
-        font_size = best
-    font, lh, total = layout(font_size)
-    if total > height:
-        raise ValueError(f"{n} line(s) at {font_size}px need {total} dots; tape has {height}")
-
-    widths = [font.getlength(line) for line in lines]
-    width = int(max(widths)) + 2
-    img = _blank(width, height)
-    d = ImageDraw.Draw(img)
-    y = (height - total) // 2
-    for line, w in zip(lines, widths):
-        x = {"left": 0, "right": width - w, "center": (width - w) / 2}.get(align, (width - w) / 2)
-        d.text((x, y), line, font=font, fill=0)
-        y += int(lh * (1 + line_spacing))
-    return img
-
-
-def render_qr(data: str, height: int, quiet_modules: int = 1) -> Image.Image:
-    import qrcode
-    from qrcode.constants import ERROR_CORRECT_M
-
-    qr = qrcode.QRCode(border=0, error_correction=ERROR_CORRECT_M)
-    qr.add_data(data)
-    qr.make(fit=True)
-    modules = qr.modules_count + 2 * quiet_modules
-    box = height // modules
-    if box < 1:
-        raise ValueError(f"QR needs {modules} modules but tape only has {height} dots; shorten the data")
-    matrix = qr.get_matrix()
-    size = box * qr.modules_count
-    img = _blank(size + 2 * quiet_modules * box, height)
-    d = ImageDraw.Draw(img)
-    off_x = quiet_modules * box
-    off_y = (height - size) // 2
-    for r, row in enumerate(matrix):
-        for c, v in enumerate(row):
-            if v:
-                d.rectangle([off_x + c * box, off_y + r * box,
-                             off_x + (c + 1) * box - 1, off_y + (r + 1) * box - 1], fill=0)
-    return img
-
-
-def render_image(data: bytes, height: int, dither: bool = True, invert: bool = False,
-                 fit: str = "height") -> Image.Image:
-    src = Image.open(io.BytesIO(data))
-    src = ImageOps.exif_transpose(src)
-    if src.mode in ("RGBA", "LA", "P"):
-        bg = Image.new("RGBA", src.size, (255, 255, 255, 255))
-        src = Image.alpha_composite(bg, src.convert("RGBA"))
-    gray = src.convert("L")
-    if invert:
-        gray = ImageOps.invert(gray)
-    if fit == "height":
-        w = max(1, round(gray.width * height / gray.height))
-        gray = gray.resize((w, height), Image.LANCZOS)
-    mono = gray.convert("1", dither=Image.FLOYDSTEINBERG if dither else Image.NONE)
-    return mono.convert("L")
-
-
-def hstack(parts: list[Image.Image], gap: int, height: int) -> Image.Image:
-    parts = [p for p in parts if p is not None]
-    width = sum(p.width for p in parts) + gap * max(0, len(parts) - 1)
-    out = _blank(width, height)
-    x = 0
-    for p in parts:
-        out.paste(p, (x, (height - p.height) // 2))
-        x += p.width + gap
-    return out
-
-
-def pad_length(img: Image.Image, min_dots: int, align: str = "center") -> Image.Image:
-    if img.width >= min_dots:
-        return img
-    out = _blank(min_dots, img.height)
-    x = {"left": 0, "right": min_dots - img.width}.get(align, (min_dots - img.width) // 2)
-    out.paste(img, (x, 0))
-    return out
 
 
 def test_pattern(height: int) -> Image.Image:

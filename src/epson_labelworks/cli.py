@@ -29,6 +29,13 @@ def _label_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--align", default="center", choices=["left", "center", "right"])
     p.add_argument("--min-length", type=float, metavar="MM")
     p.add_argument("--invert", action="store_true")
+    p.add_argument("--font", help="font family or alias (sans, serif, mono, courier, narrow...)")
+    p.add_argument("--frame", help="frame style (line, rounded, double, hazard...)")
+    p.add_argument("--barcode", help="Code 128 data (use --design for other symbologies)")
+    p.add_argument("--symbol", help="icon name or Unicode symbol")
+    p.add_argument("--design", metavar="JSON",
+                   help="any preview_label parameters as JSON (or @file.json), e.g. "
+                        "'{\"cells\": [\"1\",\"2\"], \"cell_length_mm\": 18.4}'")
     p.add_argument("--preview", type=Path, metavar="PNG", help="also write a preview PNG")
 
 
@@ -119,10 +126,16 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "pattern":
             spec = LabelSpec(test_pattern=True)
         else:
+            extra = {}
+            if a.design:
+                raw = Path(a.design[1:]).read_text() if a.design.startswith("@") else a.design
+                extra.update(json.loads(raw))
+            extra.update({k: v for k, v in (("font", a.font), ("frame", a.frame),
+                                            ("barcode", a.barcode), ("symbol", a.symbol)) if v})
             spec = LabelSpec(text=a.text, qr=a.qr, font_size=a.font_size, bold=a.bold,
                              align=a.align, min_length_mm=a.min_length, invert=a.invert,
                              image_base64=(__import__("base64").b64encode(a.image.read_bytes()).decode()
-                                           if a.image else None))
+                                           if a.image else None), extra=extra)
         tape = tape_for(a.tape)
         img = build_image(spec, profile, tape)
         if a.preview or a.cmd == "preview":

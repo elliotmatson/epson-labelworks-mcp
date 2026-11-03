@@ -4,7 +4,8 @@ FROM debian:trixie-slim
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      python3 python3-venv libusb-1.0-0 fonts-dejavu-core ca-certificates \
+      python3 python3-venv libusb-1.0-0 ca-certificates \
+      fonts-dejavu-core fonts-dejavu-extra fonts-liberation fonts-freefont-ttf fonts-urw-base35 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -12,12 +13,15 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir . \
- && /opt/venv/bin/python -c "import socket; assert socket.AF_BLUETOOTH"
+ && /opt/venv/bin/python -c "import socket; assert socket.AF_BLUETOOTH" \
+ && /opt/venv/bin/python -c "from epson_labelworks import fonts as F; f=F.list_fonts(); print(len(f), 'font families'); F.find_family('courier'); F.find_family('helvetica')"
 
 ENV PATH=/opt/venv/bin:$PATH \
     LW_HOST=0.0.0.0 \
     LW_PORT=8765 \
     LW_DRY_RUN_DIR=/data/jobs \
+    LW_DATA_DIR=/data \
+    LW_FONT_DIR=/data/fonts \
     PYTHONUNBUFFERED=1
 
 VOLUME ["/data"]
