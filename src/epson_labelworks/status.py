@@ -32,6 +32,17 @@ RAW_TW_MM = {
 }
 CABLE_TW = {0x11, 0x12}
 
+# 'TR' tape kind (material), from Epson's Android SDK via tyalie's notes.
+# The source lists 0x56 twice; DieCutCircle is assumed to be 0x60 (between 5f and 61).
+TAPE_KINDS = {
+    0x00: "normal", 0x01: "transfer", 0x10: "cable", 0x11: "index", 0x40: "braille",
+    0x50: "olefin", 0x51: "thermal_paper", 0x52: "tube", 0x53: "pet",
+    0x54: "die_cut_1", 0x55: "die_cut_2", 0x56: "die_cut_3", 0x57: "die_cut_4",
+    0x58: "die_cut_5", 0x60: "die_cut_circle", 0x61: "die_cut_ellipse",
+    0x62: "die_cut_rounded_corners", 0x70: "hst", 0x72: "cleaning", 0x80: "vinyl",
+    0xFF: "unknown",
+}
+
 READY_STATES = {0x00, 0x04, 0x05}
 
 
@@ -53,9 +64,16 @@ class PrinterStatus:
     def ready(self) -> bool:
         return (self.error_code in (None, 0)) and (self.state_code in READY_STATES)
 
+    @property
+    def tape_kind(self) -> str | None:
+        if self.tape_kind_code is None:
+            return None
+        return TAPE_KINDS.get(self.tape_kind_code, f"kind_{self.tape_kind_code:02x}")
+
     def to_dict(self) -> dict:
         d = asdict(self)
         d["ready"] = self.ready
+        d["tape_kind"] = self.tape_kind
         return d
 
 

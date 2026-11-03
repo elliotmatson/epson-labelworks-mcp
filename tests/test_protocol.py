@@ -110,6 +110,9 @@ def test_px400_hardware_status_frame():
     st = parse_text_frame(PX400_FRAME)
     assert (st.state, st.error, st.tape_width_mm, st.ready) == ("idle", "no_error", 12, True)
     assert st.fields["WR"] == 0 and "BD" not in st.fields
+    assert st.to_dict()["tape_kind"] == "normal"
+    tube = parse_text_frame(PX400_FRAME.replace(b"TR:00", b"TR:52"))
+    assert tube.tape_kind == "tube"
 
 
 def test_px400_stream_resync():
