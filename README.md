@@ -79,12 +79,12 @@ curl localhost:8765/healthz
 * For Bluetooth, set `LW_TRANSPORT=rfcomm` and use `network_mode: host` (RFCOMM uses the
   host's BlueZ stack). The image uses Debian's `python3` because the official
   `python:*-slim` images are built without `AF_BLUETOOTH`.
-* **Obot:** add a remote MCP server at `http://<host>:8765/mcp` with header
-  `X-API-Key: <LW_MCP_TOKEN>`. Use this rather than `Authorization`, because a gateway
-  may replace the `Authorization` header with its own credentials. Other clients can
-  send `Authorization: Bearer <LW_MCP_TOKEN>`. Rejected requests are logged with the
-  names (never values) of the auth headers that arrived. Set `LW_ALLOWED_HOSTS` to the
-  hostname Obot uses to turn on DNS-rebinding protection.
+* **Obot:** add a remote MCP server at `http://<host>:8765/mcp` with a static header
+  `Authorization` whose value is `Bearer <LW_MCP_TOKEN>` (mark it Sensitive). Leave
+  Obot's *Value Prefix* empty: it is joined to the value with no space, which yields
+  `Bearer<token>` and a 403. `X-API-Key: <LW_MCP_TOKEN>` also works. Rejected requests
+  are logged with the names (never values) of the auth headers that arrived. Set
+  `LW_ALLOWED_HOSTS` to the hostname Obot uses to turn on DNS-rebinding protection.
 * For local use you can run over stdio: `labelworks serve --stdio`.
 
 ## Environment
