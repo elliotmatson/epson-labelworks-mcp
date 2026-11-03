@@ -40,6 +40,27 @@ def test_bad_token_is_403_without_challenge():
         assert status == 403 and b"www-authenticate" not in headers
 
 
+def _call_headers(headers, token="secret"):
+    sent = []
+
+    async def send(msg):
+        sent.append(msg)
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    scope = {"type": "http", "path": "/mcp", "method": "POST", "headers": headers}
+    asyncio.run(BearerAuth(_inner, token)(scope, receive, send))
+    return sent[0]["status"]
+
+
+def test_api_key_header_works_when_gateway_overwrites_authorization():
+    # Obot-style: its own bearer in Authorization, our token in X-API-Key
+    assert _call_headers([(b"authorization", b"Bearer obot-internal"),
+                          (b"x-api-key", b"secret")]) == 200
+    assert _call_headers([(b"x-api-key", b"wrong")]) == 403
+
+
 def test_good_token_and_open_mode_pass_through():
     assert _call("/mcp", b"Bearer secret")[0] == 200
     assert _call("/mcp", None, token=None)[0] == 200

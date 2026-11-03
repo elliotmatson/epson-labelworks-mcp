@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import io
 import logging
 import os
@@ -200,8 +201,9 @@ async def print_test_pattern(tape_mm: TapeMM = None,
 class BearerAuth:
     """Optional static bearer token (LW_MCP_TOKEN). /healthz is always open."""
 
-    def __init__(self, app, token: str | None):
+    def __init__(self, app, token: str | None, header: str | None = None):
         self.app, self.token = app, token
+        self.header = (header or os.environ.get("LW_AUTH_HEADER") or "x-api-key").lower().encode()
 
     # A static token is not OAuth. Answering 401 + WWW-Authenticate (especially on
     # the /.well-known discovery paths MCP clients probe first) makes gateways such
@@ -222,11 +224,28 @@ class BearerAuth:
                 return await self._plain(send, 200, b"ok")
             if path.startswith("/.well-known/"):
                 return await self._plain(send, 404, b"not found")
-            if self.token:
-                headers = dict(scope.get("headers") or [])
-                if headers.get(b"authorization", b"") != f"Bearer {self.token}".encode():
-                    return await self._plain(send, 403, b"forbidden: missing or invalid bearer token")
+            if self.token and not self._authorized(scope):
+                names = sorted(k.decode() for k, _ in scope.get("headers") or []
+                               if k.lower() in (b"authorization", self.header))
+                log.warning("rejected %s %s: no valid token (auth headers present: %s)",
+                            scope.get("method"), path, ", ".join(names) or "none")
+                return await self._plain(send, 403, b"forbidden: missing or invalid token")
         await self.app(scope, receive, send)
+
+    def _authorized(self, scope) -> bool:
+        """Token in `Authorization: Bearer <t>` or in the LW_AUTH_HEADER header.
+
+        Gateways like Obot may replace the Authorization header with their own
+        credentials, so a dedicated header (default X-API-Key) is also accepted.
+        """
+        want = self.token.encode()
+        for k, v in scope.get("headers") or []:
+            k = k.lower()
+            if k == b"authorization" and hmac.compare_digest(v, b"Bearer " + want):
+                return True
+            if k == self.header and hmac.compare_digest(v.strip(), want):
+                return True
+        return False
 
 
 def http_app():

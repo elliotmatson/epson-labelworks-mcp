@@ -80,8 +80,11 @@ curl localhost:8765/healthz
   host's BlueZ stack). The image uses Debian's `python3` because the official
   `python:*-slim` images are built without `AF_BLUETOOTH`.
 * **Obot:** add a remote MCP server at `http://<host>:8765/mcp` with header
-  `Authorization: Bearer <LW_MCP_TOKEN>`. Set `LW_ALLOWED_HOSTS` to the hostname Obot
-  uses to turn on DNS-rebinding protection.
+  `X-API-Key: <LW_MCP_TOKEN>`. Use this rather than `Authorization`, because a gateway
+  may replace the `Authorization` header with its own credentials. Other clients can
+  send `Authorization: Bearer <LW_MCP_TOKEN>`. Rejected requests are logged with the
+  names (never values) of the auth headers that arrived. Set `LW_ALLOWED_HOSTS` to the
+  hostname Obot uses to turn on DNS-rebinding protection.
 * For local use you can run over stdio: `labelworks serve --stdio`.
 
 ## Environment
