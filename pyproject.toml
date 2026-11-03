@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "epson-labelworks-mcp"
+version = "0.1.0"
+description = "MCP server for Epson LabelWorks label printers (LW-PX400 first)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+  "mcp>=2.3,<3",
+  "pillow>=10",
+  "qrcode>=7.4",
+  "pyusb>=1.2",
+  "pyserial>=3.5",
+  "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+labelworks = "epson_labelworks.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/epson_labelworks"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
